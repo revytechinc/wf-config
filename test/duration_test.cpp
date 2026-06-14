@@ -3,15 +3,39 @@
 
 #include <wayfire/config/option.hpp>
 #include <wayfire/util/duration.hpp>
-#include <unistd.h>
+#include <cstdlib>
 
 using namespace wf;
 using namespace wf::config;
 using namespace wf::animation;
 
+// ---------------------------------------------------------------------------
+// Use the mock clock in tests for deterministic, platform-independent timing.
+// ---------------------------------------------------------------------------
+namespace
+{
+struct MockClockEnabler
+{
+    MockClockEnabler()
+    {
+        // Activate the mock clock before any duration_t is constructed.
+        // The factory checks this env var once per call and caches the result,
+        // so it must be set before the first clock() call.
+        setenv("WF_DURATION_USE_MOCK_CLOCK", "1", 1);
+    }
+};
+// Static: runs before main()
+static MockClockEnabler enable_mock_clock;
+} // namespace
+
 TEST_CASE("wf::animation::duration_t")
 {
     duration_t duration;
+
+    auto advance = [] (int ms)
+    {
+        wf::platform::PlatformFactory::advance_mock_clock(ms);
+    };
 
     auto check_lifetime = [&] ()
     {
@@ -22,14 +46,14 @@ TEST_CASE("wf::animation::duration_t")
         CHECK(duration.running());
         CHECK(duration.progress() == doctest::Approx{0.0});
 
-        usleep(50000);
-        CHECK(duration.progress() == doctest::Approx{0.5}.epsilon(0.1));
+        advance(50);
+        CHECK(duration.progress() == doctest::Approx{0.5}.epsilon(0.001));
         CHECK(duration.running());
         CHECK(duration.running());
-        usleep(60000);
+        advance(60);
 
         /* At this point, duration must be finished */
-        CHECK(duration.progress() == doctest::Approx{1.0}.epsilon(0.01));
+        CHECK(duration.progress() == doctest::Approx{1.0}.epsilon(0.001));
         CHECK(duration.running()); // one last time
         CHECK(duration.running() == false);
         CHECK(duration.running() == false);
@@ -66,20 +90,20 @@ TEST_CASE("wf::animation::duration_t")
         CHECK(duration.running());
         CHECK(duration.progress() == doctest::Approx{direction ? 0.0 : 1.0});
 
-        usleep(75000);
+        advance(75);
         CHECK(duration.progress() == doctest::Approx{direction ? 0.75 : 0.25}.epsilon(
-            0.1));
+            0.001));
         duration.reverse();
-        usleep(50000);
+        advance(50);
         CHECK(duration.progress() == doctest::Approx{direction ? 0.25 : 0.75}.epsilon(
-            0.1));
+            0.001));
         CHECK(duration.running());
         CHECK(duration.running());
-        usleep(35000);
+        advance(35);
 
         /* At this point, duration must be finished */
         CHECK(duration.progress() ==
-            doctest::Approx{direction ? 0.0 : 1.0}.epsilon(0.01));
+            doctest::Approx{direction ? 0.0 : 1.0}.epsilon(0.001));
         CHECK(duration.running()); // one last time
         CHECK(duration.running() == false);
         CHECK(duration.running() == false);
@@ -107,21 +131,21 @@ TEST_CASE("wf::animation::timed_transition_t")
 
     duration.start();
     CHECK((double)transition == doctest::Approx(start));
-    usleep(50000);
-    CHECK((double)transition == doctest::Approx(middle).epsilon(0.1));
-    CHECK((double)transition2 == doctest::Approx(middle).epsilon(0.1));
+    wf::platform::PlatformFactory::advance_mock_clock(50);
+    CHECK((double)transition == doctest::Approx(middle).epsilon(0.001));
+    CHECK((double)transition2 == doctest::Approx(middle).epsilon(0.001));
     transition.restart_with_end(overend);
     transition2.restart_same_end();
-    CHECK(transition.start == doctest::Approx(middle).epsilon(0.1));
-    CHECK(transition2.start == doctest::Approx(middle).epsilon(0.1));
+    CHECK(transition.start == doctest::Approx(middle).epsilon(0.001));
+    CHECK(transition2.start == doctest::Approx(middle).epsilon(0.001));
     CHECK(transition.end == doctest::Approx(overend));
     CHECK(transition2.end == doctest::Approx(end));
-    usleep(60000);
-    CHECK((double)transition == doctest::Approx(overend).epsilon(0.1));
+    wf::platform::PlatformFactory::advance_mock_clock(60);
+    CHECK((double)transition == doctest::Approx(overend).epsilon(0.001));
 
     transition.flip();
-    CHECK(transition.start == doctest::Approx(3.0).epsilon(0.1));
-    CHECK(transition.end == doctest::Approx(middle).epsilon(0.1));
+    CHECK(transition.start == doctest::Approx(3.0).epsilon(0.001));
+    CHECK(transition.end == doctest::Approx(middle).epsilon(0.001));
 }
 
 TEST_CASE("wf::animation::simple_animation_t")
@@ -144,10 +168,10 @@ TEST_CASE("wf::animation::simple_animation_t")
 
         CHECK(anim.running());
         CHECK((double)anim == doctest::Approx(s));
-        usleep(5000);
-        CHECK((double)anim == doctest::Approx((s + e) / 2).epsilon(0.1));
+        wf::platform::PlatformFactory::advance_mock_clock(5);
+        CHECK((double)anim == doctest::Approx((s + e) / 2).epsilon(0.001));
         CHECK(anim.running());
-        usleep(5500);
+        wf::platform::PlatformFactory::advance_mock_clock(6);
         CHECK((double)anim == doctest::Approx(e));
         CHECK(anim.running());
         CHECK(!anim.running());

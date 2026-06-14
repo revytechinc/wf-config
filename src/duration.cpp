@@ -3,20 +3,150 @@
 #include <wayfire/config/types.hpp>
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <limits>
 #include <map>
 #include <sstream>
 
-double bezier_helper(double t, double p0, double p1, double p2, double p3)
+// ---------------------------------------------------------------------------
+// Platform implementations
+// ---------------------------------------------------------------------------
+
+namespace wf
+{
+namespace platform
+{
+
+/** Linux: strict machine epsilon. */
+class LinuxEpsilonComparison : public IEpsilonComparison
+{
+  public:
+    bool compare(double a, double b) const override
+    {
+        return std::fabs(a - b) <= std::numeric_limits<double>::epsilon() * std::fabs(a + b);
+    }
+};
+
+/** FreeBSD: wider tolerance suitable for animation control points. */
+class FreeBSDEpsilonComparison : public IEpsilonComparison
+{
+    // 1e-12 captures differences that matter for easing curves while
+    // treating genuinely close values (e.g. 1.0 and 1+1e-14) as equal.
+    static constexpr double TOLERANCE = 1e-12;
+
+  public:
+    bool compare(double a, double b) const override
+    {
+        return std::fabs(a - b) <= TOLERANCE;
+    }
+};
+
+/** Linux: system_clock — fine on bare metal, can drift in VMs. */
+class LinuxClockSource : public IClockSource
+{
+  public:
+    time_point_t now() const override
+    {
+        using namespace std::chrono;
+        return {duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count()};
+    }
+
+    int64_t elapsed_ms(const time_point_t& start) const override
+    {
+        using namespace std::chrono;
+        auto now_pt = system_clock::now().time_since_epoch();
+        return duration_cast<milliseconds>(now_pt).count() - start.value;
+    }
+};
+
+/** FreeBSD: steady_clock — monotonic, unaffected by NTP/vm-clock jitter. */
+class FreeBSDClockSource : public IClockSource
+{
+  public:
+    time_point_t now() const override
+    {
+        using namespace std::chrono;
+        return {duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count()};
+    }
+
+    int64_t elapsed_ms(const time_point_t& start) const override
+    {
+        using namespace std::chrono;
+        auto now_pt = steady_clock::now().time_since_epoch();
+        return duration_cast<milliseconds>(now_pt).count() - start.value;
+    }
+};
+
+/** Deterministic clock for tests — only advances via advance_mock_clock(). */
+class MockClockSource : public IClockSource
+{
+  public:
+    // Start at a large epoch value so is_ready() returns true before start().
+    // This mirrors real-clock behavior where elapsed time is always huge.
+    mutable int64_t current_ms = INT64_MAX - 1000000;
+
+    time_point_t now() const override
+    {
+        return {current_ms};
+    }
+
+    int64_t elapsed_ms(const time_point_t& start) const override
+    {
+        return current_ms - start.value;
+    }
+};
+
+static MockClockSource& mock_clock()
+{
+    static MockClockSource instance;
+    return instance;
+}
+
+// Factory — the single #ifdef lives here, nowhere else.
+const IEpsilonComparison& PlatformFactory::epsilon()
+{
+#ifdef __FreeBSD__
+    static const FreeBSDEpsilonComparison instance;
+#else
+    static const LinuxEpsilonComparison instance;
+#endif
+    return instance;
+}
+
+const IClockSource& PlatformFactory::clock()
+{
+    static const bool use_mock =
+        (std::getenv("WF_DURATION_USE_MOCK_CLOCK") != nullptr);
+    if (use_mock)
+    {
+        return mock_clock();
+    }
+#ifdef __FreeBSD__
+    static const FreeBSDClockSource real_instance;
+    return real_instance;
+#else
+    static const LinuxClockSource real_instance;
+    return real_instance;
+#endif
+}
+
+void PlatformFactory::advance_mock_clock(int64_t delta_ms)
+{
+    mock_clock().current_ms += delta_ms;
+}
+
+} // namespace platform
+} // namespace wf
+
+// ---------------------------------------------------------------------------
+// Easing helpers (platform-agnostic)
+// ---------------------------------------------------------------------------
+
+static double bezier_helper(double t, double p0, double p1, double p2, double p3)
 {
     const double u = 1 - t;
     return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
-}
-
-inline bool epsilon_comparison(double a, double b)
-{
-    return std::fabs(a - b) <= std::numeric_limits<double>::epsilon() * std::fabs(a + b);
 }
 
 namespace wf
@@ -80,16 +210,17 @@ bool wf::animation_description_t::operator ==(const animation_description_t & ot
     double x1_a, y1_a, x2_a, y2_a, x1_b, y1_b, x2_b, y2_b;
     easing_a >> x1_a >> y1_a >> x2_a >> y2_a;
     easing_b >> x1_b >> y1_b >> x2_b >> y2_b;
-    return epsilon_comparison(x1_a, x1_b) &&
-           epsilon_comparison(y1_a, y1_b) &&
-           epsilon_comparison(x2_a, x2_b) &&
-           epsilon_comparison(y2_a, y2_b);
+    const auto& eps = platform::PlatformFactory::epsilon();
+    return eps.compare(x1_a, x1_b) &&
+           eps.compare(y1_a, y1_b) &&
+           eps.compare(x2_a, x2_b) &&
+           eps.compare(y2_a, y2_b);
 }
 
 class wf::animation::duration_t::impl
 {
   public:
-    decltype(std::chrono::system_clock::now()) start_point;
+    platform::IClockSource::time_point_t start_point{0};
 
     std::shared_ptr<wf::config::option_t<int>> length;
     std::shared_ptr<wf::config::option_t<animation_description_t>> descr;
@@ -100,9 +231,7 @@ class wf::animation::duration_t::impl
 
     int64_t get_elapsed() const
     {
-        using namespace std::chrono;
-        auto now = system_clock::now();
-        return duration_cast<milliseconds>(now - start_point).count();
+        return platform::PlatformFactory::clock().elapsed_ms(start_point);
     }
 
     int get_duration() const
@@ -194,7 +323,7 @@ wf::animation::duration_t& wf::animation::duration_t::operator =(
 void wf::animation::duration_t::start()
 {
     this->priv->is_running  = 1;
-    this->priv->start_point = std::chrono::system_clock::now();
+    this->priv->start_point = platform::PlatformFactory::clock().now();
 }
 
 double wf::animation::duration_t::progress() const
@@ -218,8 +347,8 @@ void wf::animation::duration_t::reverse()
 {
     auto total_duration = this->priv->get_duration();
     auto elapsed   = std::min(this->priv->get_elapsed(), (int64_t)total_duration);
-    auto remaining = std::chrono::milliseconds(total_duration - elapsed);
-    this->priv->start_point = std::chrono::system_clock::now() - remaining;
+    this->priv->start_point = platform::PlatformFactory::clock().now();
+    this->priv->start_point.value -= (total_duration - elapsed);
     this->priv->reverse     = !this->priv->reverse;
 }
 
