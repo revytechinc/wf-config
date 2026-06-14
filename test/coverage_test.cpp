@@ -442,15 +442,65 @@ TEST_CASE("compound_option: clone_option")
     CHECK(cloned->get_value<int, std::string>() == opt.get_value<int, std::string>());
 }
 
-TEST_CASE("compound_option: set_value_str returns false")
+TEST_CASE("compound_option: set_value_str and get_value_str")
+{
+    compound_option_t::entries_t entries;
+    entries.push_back(std::make_unique<compound_option_entry_t<int>>("int_"));
+    entries.push_back(std::make_unique<compound_option_entry_t<std::string>>("str_"));
+
+    compound_option_t opt{"test", std::move(entries)};
+
+    SUBCASE("roundtrip") {
+        opt.set_value(compound_list_t<int, std::string>{{"k1", 42, "hello"}});
+        auto str = opt.get_value_str();
+        CHECK(str == "k1=42;hello");
+    }
+
+    SUBCASE("multiple entries") {
+        opt.set_value(compound_list_t<int, std::string>{
+            {"k1", 1, "a"},
+            {"k2", 2, "b"}
+        });
+        auto str = opt.get_value_str();
+        CHECK(str == "k1=1;a,k2=2;b");
+    }
+
+    SUBCASE("empty") {
+        CHECK(opt.get_value_str() == "");
+        CHECK(opt.set_value_str("") == true);
+        CHECK(opt.get_value_str() == "");
+    }
+
+    SUBCASE("invalid format - wrong entry count") {
+        CHECK(opt.set_value_str("k1=42") == false);
+    }
+
+    SUBCASE("invalid format - wrong type") {
+        CHECK(opt.set_value_str("k1=notanint;hello") == false);
+    }
+}
+
+TEST_CASE("compound_option: get_default_value_str")
+{
+    compound_option_t::entries_t entries;
+    entries.push_back(std::make_unique<compound_option_entry_t<int>>("int_", "", "10"));
+    entries.push_back(std::make_unique<compound_option_entry_t<std::string>>("str_", "", "default"));
+
+    compound_option_t opt{"test", std::move(entries)};
+
+    auto def_str = opt.get_default_value_str();
+    CHECK(def_str == "10;default");
+}
+
+TEST_CASE("compound_option: set_default_value_str returns false")
 {
     compound_option_t::entries_t entries;
     entries.push_back(std::make_unique<compound_option_entry_t<int>>("int_"));
 
     compound_option_t opt{"test", std::move(entries)};
 
-    // set_value_str is not supported for compound options
-    CHECK(opt.set_value_str("k1=42") == false);
+    // set_default_value_str is not supported (ambiguous for compound options)
+    CHECK(opt.set_default_value_str("42") == false);
 }
 
 TEST_CASE("compound_option: reset_to_default clears value")
@@ -464,39 +514,6 @@ TEST_CASE("compound_option: reset_to_default clears value")
 
     opt.reset_to_default();
     CHECK(opt.get_value<int>().empty());
-}
-
-TEST_CASE("compound_option: set_default_value_str returns false")
-{
-    compound_option_t::entries_t entries;
-    entries.push_back(std::make_unique<compound_option_entry_t<int>>("int_"));
-
-    compound_option_t opt{"test", std::move(entries)};
-
-    // set_default_value_str is not supported for compound options
-    CHECK(opt.set_default_value_str("42") == false);
-}
-
-TEST_CASE("compound_option: get_value_str returns empty")
-{
-    compound_option_t::entries_t entries;
-    entries.push_back(std::make_unique<compound_option_entry_t<int>>("int_"));
-
-    compound_option_t opt{"test", std::move(entries)};
-
-    // get_value_str is not supported for compound options
-    CHECK(opt.get_value_str() == "");
-}
-
-TEST_CASE("compound_option: get_default_value_str returns empty")
-{
-    compound_option_t::entries_t entries;
-    entries.push_back(std::make_unique<compound_option_entry_t<int>>("int_"));
-
-    compound_option_t opt{"test", std::move(entries)};
-
-    // get_default_value_str is not supported for compound options
-    CHECK(opt.get_default_value_str() == "");
 }
 
 TEST_CASE("compound_option: set_value_untyped with invalid data")
@@ -947,6 +964,28 @@ TEST_CASE("duration: epsilon comparison")
         REQUIRE(a1.has_value());
         REQUIRE(a2.has_value());
         CHECK_FALSE(*a1 == *a2);
+    }
+
+    SUBCASE("different cubic-bezier y2 values") {
+        // This tests the fix for the bug where y2_b was compared to itself
+        auto a1 = wf::option_type::from_string<wf::animation_description_t>("100ms cubic-bezier 0.25 0.1 0.75 0.9");
+        auto a2 = wf::option_type::from_string<wf::animation_description_t>("100ms cubic-bezier 0.25 0.1 0.75 1.0");
+        REQUIRE(a1.has_value());
+        REQUIRE(a2.has_value());
+        // The easing names should be different since they store the exact values
+        CHECK(a1->easing_name != a2->easing_name);
+        // Should NOT be equal because y2 is different (0.9 vs 1.0)
+        CHECK_FALSE(*a1 == *a2);
+    }
+
+    SUBCASE("epsilon-close cubic-bezier values are equal") {
+        // Two values that differ by less than epsilon should be considered equal
+        auto a1 = wf::option_type::from_string<wf::animation_description_t>("100ms cubic-bezier 0.25 0.1 0.75 1");
+        auto a2 = wf::option_type::from_string<wf::animation_description_t>("100ms cubic-bezier 0.25 0.1 0.75 1.0000000000000001");
+        REQUIRE(a1.has_value());
+        REQUIRE(a2.has_value());
+        // Should be equal because they're within epsilon
+        CHECK(*a1 == *a2);
     }
 }
 

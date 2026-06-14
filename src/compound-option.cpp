@@ -1,6 +1,7 @@
 #include <wayfire/config/compound-option.hpp>
 #include <wayfire/config/xml.hpp>
 #include "option-impl.hpp"
+#include <sstream>
 
 using namespace wf::config;
 
@@ -153,31 +154,140 @@ std::shared_ptr<option_base_t> compound_option_t::clone_option() const
     return result;
 }
 
-bool wf::config::compound_option_t::set_value_str(const std::string&)
+bool wf::config::compound_option_t::set_value_str(const std::string& str)
 {
-    // XXX: not supported yet
-    return false;
+    // Format: key1=val1;val2;...,key2=val1;val2;...
+    if (str.empty())
+    {
+        this->value.clear();
+        notify_updated();
+        return true;
+    }
+
+    stored_type_t new_value;
+    std::istringstream tuples_stream(str);
+
+    std::string tuple_str;
+    while (std::getline(tuples_stream, tuple_str, ','))
+    {
+        auto eq_pos = tuple_str.find('=');
+        if (eq_pos == std::string::npos)
+        {
+            return false;
+        }
+
+        std::string key = tuple_str.substr(0, eq_pos);
+        std::string values_str = tuple_str.substr(eq_pos + 1);
+
+        std::vector<std::string> entry_values;
+        entry_values.push_back(key);
+
+        std::istringstream values_stream(values_str);
+        std::string val;
+        while (std::getline(values_stream, val, ';'))
+        {
+            entry_values.push_back(val);
+        }
+
+        // Check that we have the right number of entries
+        if (entry_values.size() != this->entries.size() + 1)
+        {
+            return false;
+        }
+
+        // Validate each entry is parsable
+        for (size_t i = 1; i < entry_values.size(); i++)
+        {
+            if (!this->entries[i - 1]->is_parsable(entry_values[i]))
+            {
+                return false;
+            }
+        }
+
+        new_value.push_back(std::move(entry_values));
+    }
+
+    this->value = std::move(new_value);
+    notify_updated();
+    return true;
 }
 
 void wf::config::compound_option_t::reset_to_default()
 {
+    // Restore default values for each entry
+    stored_type_t default_value;
+    for (const auto& entry : this->entries)
+    {
+        if (entry->get_default_value())
+        {
+            // There's a default, we would need to know which keys had defaults
+            // For now, just clear like before
+        }
+    }
+
     this->value.clear();
+    notify_updated();
 }
 
-bool wf::config::compound_option_t::set_default_value_str(const std::string&)
+bool wf::config::compound_option_t::set_default_value_str(const std::string& str)
 {
-    // XXX: not supported yet
+    // Format for defaults: val1;val2;... (for the first entry's default)
+    // Or we could set per-entry defaults, but the structure doesn't easily support this
+    // For now, return false as setting defaults via string is ambiguous
+    (void)str;
     return false;
 }
 
 std::string wf::config::compound_option_t::get_value_str() const
 {
-    // XXX: not supported yet
-    return "";
+    if (this->value.empty())
+    {
+        return "";
+    }
+
+    std::ostringstream result;
+    for (size_t i = 0; i < this->value.size(); i++)
+    {
+        if (i > 0)
+        {
+            result << ",";
+        }
+
+        result << this->value[i][0] << "=";
+        for (size_t j = 1; j < this->value[i].size(); j++)
+        {
+            if (j > 1)
+            {
+                result << ";";
+            }
+            result << this->value[i][j];
+        }
+    }
+
+    return result.str();
 }
 
 std::string wf::config::compound_option_t::get_default_value_str() const
 {
-    // XXX: not supported yet
-    return "";
+    // Collect default values from all entries
+    std::ostringstream result;
+    for (size_t i = 0; i < this->entries.size(); i++)
+    {
+        if (i > 0)
+        {
+            result << ";";
+        }
+
+        const auto& def = this->entries[i]->get_default_value();
+        if (def)
+        {
+            result << *def;
+        }
+        else
+        {
+            result << "";
+        }
+    }
+
+    return result.str();
 }

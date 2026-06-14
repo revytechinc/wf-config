@@ -68,7 +68,7 @@ bool wf::animation_description_t::operator ==(const animation_description_t & ot
 
     // Cubic-bezier easings need parsing to handle epsilon
     std::stringstream easing_a(easing_name);
-    std::stringstream easing_b(easing_name);
+    std::stringstream easing_b(other.easing_name);
     std::string easing_type_a, easing_type_b;
     easing_a >> easing_type_a;
     easing_b >> easing_type_b;
@@ -83,7 +83,7 @@ bool wf::animation_description_t::operator ==(const animation_description_t & ot
     return epsilon_comparison(x1_a, x1_b) &&
            epsilon_comparison(y1_a, y1_b) &&
            epsilon_comparison(x2_a, x2_b) &&
-           epsilon_comparison(y2_b, y2_b);
+           epsilon_comparison(y2_a, y2_b);
 }
 
 class wf::animation::duration_t::impl
