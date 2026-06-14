@@ -80,3 +80,10 @@ number_locale_test = executable(
 if get_option('locale_test')
   test('Number locale test', number_locale_test)
 endif
+
+coverage_test = executable(
+    'coverage_test',
+    'coverage_test.cpp',
+    dependencies: [wfconfig, doctest, libxml2],
+    install: false)
+test('Coverage test', coverage_test)
