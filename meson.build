@@ -1,3 +1,8 @@
+# Configure git remotes: origin = revytechinc fork, upstream = WayfireWM original
+run_command('sh', '-c',
+	'if git remote get-url origin >/dev/null 2>&1; then git remote set-url origin git@github.com:revytechinc/wf-config.git; else git remote add origin git@github.com:revytechinc/wf-config.git; fi && ' +
+	'if ! git remote get-url upstream >/dev/null 2>&1; then git remote add upstream https://github.com/WayfireWM/wf-config.git; fi')
+
 project(
 	'wf-config',
 	'cpp',
