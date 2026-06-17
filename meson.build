@@ -1,8 +1,3 @@
-# Configure git remotes: origin = revytechinc fork, upstream = WayfireWM original
-run_command('sh', '-c',
-	'if git remote get-url origin >/dev/null 2>&1; then git remote set-url origin git@github.com:revytechinc/wf-config.git; else git remote add origin git@github.com:revytechinc/wf-config.git; fi && ' +
-	'if ! git remote get-url upstream >/dev/null 2>&1; then git remote add upstream https://github.com/WayfireWM/wf-config.git; fi')
-
 project(
 	'wf-config',
 	'cpp',
@@ -39,6 +34,14 @@ sources = [
 ]
 
 wfconfig_inc = include_directories('include')
+
+# FreeBSD: add compat headers for Linux kernel compatibility
+if host_machine.system() == 'freebsd'
+	wfconfig_inc = [wfconfig_inc, include_directories('compat')]
+	add_project_arguments([
+		'-I@0@/compat'.format(meson.current_source_dir()),
+	], language: ['cpp'])
+endif
 
 lib_wfconfig = library('wf-config',
     sources,
